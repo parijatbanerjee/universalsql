@@ -37,7 +37,8 @@ public class SecurityConfig {
                 .requestMatchers(
                     "/actuator/health", "/actuator/prometheus",
                     "/mock-jwks",
-                    "/dev/token"  // dev-only; DevController only active with mock-enabled=true
+                    "/dev/token",    // dev-only; DevController only active with mock-enabled=true
+                    "/admin/v1/**"   // admin endpoints use X-Admin-Key header, not JWT
                 ).permitAll()
                 .anyRequest().authenticated()
             )

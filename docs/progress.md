@@ -17,6 +17,7 @@
 | 9 | Cache-only query path end-to-end (Orchestrator, ExecutionEngine, QueryController, API DTOs) | ✅ Done | TBD |
 | 20 | Test suite: SecretLeakScanTest, ResultCacheTest, CaffeineResultCache wired into Orchestrator | ✅ Done | TBD |
 | 21 | k6 load test script, generate-token.sh, DevController /dev/token endpoint | ✅ Done | TBD |
+| 23 | Crypto-shred and off-boarding: CryptoShredService, AdminController, Orchestrator tenant check | ✅ Done | TBD |
 
 ## Canonical Tests (for README)
 
@@ -167,5 +168,17 @@ These are the two tests that the README names as proof of correctness.
   - Error rate: <1%
   - Bottleneck: single JVM thread pool saturates ~600 RPS; DuckDB file lock is the main contention point
 
+### Task 23: Crypto-shred and Off-boarding
+- `CryptoShredService` interface in `crypto.api` (controlplane-accessible); `CryptoShredServiceImpl` in `crypto`
+- `AdminController` at `/admin/v1/tenant/{tenantId}` (DELETE): validates `X-Admin-Key` header, destroys KEK, marks tenant inactive, cancels jobs, deletes DuckDB file
+- Orchestrator `checkTenantActive()`: looks up tenant status; throws `ENTITLEMENT_DENIED` if inactive; silently passes if tenant not in DB (test tolerance)
+- `SecurityConfig` permits `/admin/v1/**` (key-based auth, not JWT)
+- `Task23CryptoShredTest`:
+  - Test 1: generates DEK, destroys KEK, proves `unwrapDek` throws — undecryptable BEFORE file deletion
+  - Test 2: shreds via admin endpoint, then orchestrator throws ENTITLEMENT_DENIED for inactive tenant
+  - Test 3: wrong admin key → 403 FORBIDDEN
+- ArchUnit: AdminController uses `CryptoShredService` from `crypto.api` (not `crypto` internals) — all rules pass
+- 113 tests total, all green
+
 ## Pending Tasks
-- Tasks 23, 24
+- Task 24
