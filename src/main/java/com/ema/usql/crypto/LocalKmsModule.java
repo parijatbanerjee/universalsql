@@ -24,7 +24,7 @@ import java.util.Base64;
  * destroyKek deletes the key file — after destruction, wrapped DEKs cannot be unwrapped
  * (crypto shredding).
  */
-class LocalKmsModule implements KmsModule {
+public class LocalKmsModule implements KmsModule {
 
     private static final String KEY_ALGORITHM = "AES";
     private static final int AES_KEY_SIZE_BITS = 256;
@@ -33,7 +33,7 @@ class LocalKmsModule implements KmsModule {
     private final Path kmsDir;
     private final EnvelopeCipher envelopeCipher;
 
-    LocalKmsModule(Path kmsDir) {
+    public LocalKmsModule(Path kmsDir) {
         this.kmsDir = kmsDir;
         this.envelopeCipher = new EnvelopeCipher();
     }
