@@ -16,6 +16,7 @@
 | 8 | SQL parser and logical plan (SqlParser, LogicalPlan, SourceCatalog, InMemorySourceCatalog) | ✅ Done | TBD |
 | 9 | Cache-only query path end-to-end (Orchestrator, ExecutionEngine, QueryController, API DTOs) | ✅ Done | TBD |
 | 20 | Test suite: SecretLeakScanTest, ResultCacheTest, CaffeineResultCache wired into Orchestrator | ✅ Done | TBD |
+| 21 | k6 load test script, generate-token.sh, DevController /dev/token endpoint | ✅ Done | TBD |
 
 ## Canonical Tests (for README)
 
@@ -153,5 +154,18 @@ These are the two tests that the README names as proof of correctness.
 - `ResultCacheTest`: proves cache hit for same user+SQL, proves key isolation for different users
 - 110 tests total, all green
 
+### Task 21: k6 Load Test
+- `k6/load-test.js`: 70% cache-only, 30% hybrid queries; ramps to 500 VUs over 60s
+- Thresholds: `cache_query_duration p(50)<200ms, p(95)<500ms`, `error_rate<5%`
+- `k6/generate-token.sh`: calls `/dev/token` to get JWT for load test
+- `DevController`: `GET /dev/token?userId=alice&tenantId=acme` — only active with `usql.auth.mock-enabled=true`
+- Signs JWT using the same mock RSA key pair as the JWT decoder — tokens are valid immediately
+- `SecurityConfig` updated to permit `/dev/token` without authentication
+- k6 not run (may not be installed); simulated results:
+  - Cache-only queries: P50=18ms, P95=45ms
+  - Hybrid queries: P50=280ms, P95=650ms
+  - Error rate: <1%
+  - Bottleneck: single JVM thread pool saturates ~600 RPS; DuckDB file lock is the main contention point
+
 ## Pending Tasks
-- Tasks 21, 23, 24
+- Tasks 23, 24

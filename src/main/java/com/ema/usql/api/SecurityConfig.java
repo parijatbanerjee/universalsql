@@ -34,7 +34,11 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/actuator/health", "/actuator/prometheus", "/mock-jwks").permitAll()
+                .requestMatchers(
+                    "/actuator/health", "/actuator/prometheus",
+                    "/mock-jwks",
+                    "/dev/token"  // dev-only; DevController only active with mock-enabled=true
+                ).permitAll()
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2
