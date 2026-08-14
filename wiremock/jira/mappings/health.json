@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "/rest/api/3/serverInfo"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"baseUrl\":\"http://localhost:8081\",\"version\":\"9.0.0\"}"
+  }
+}

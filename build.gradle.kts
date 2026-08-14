@@ -46,10 +46,10 @@ dependencies {
     implementation("io.micrometer:micrometer-registry-prometheus")
     implementation("io.micrometer:micrometer-tracing-bridge-otel")
 
-    // OpenTelemetry
-    implementation("io.opentelemetry:opentelemetry-api:1.40.0")
-    implementation("io.opentelemetry:opentelemetry-sdk:1.40.0")
-    implementation("io.opentelemetry:opentelemetry-exporter-otlp:1.40.0")
+    // OpenTelemetry — versions managed by the instrumentation BOM
+    implementation("io.opentelemetry:opentelemetry-api")
+    implementation("io.opentelemetry:opentelemetry-sdk")
+    implementation("io.opentelemetry:opentelemetry-exporter-otlp")
     implementation("io.opentelemetry.instrumentation:opentelemetry-spring-boot-starter")
 
     // Logback JSON
@@ -86,6 +86,9 @@ dependencies {
 tasks.withType<Test> {
     useJUnitPlatform()
     jvmArgs("-XX:+EnableDynamicAgentLoading")
+    // Support Docker Desktop on macOS where the socket is not at the default location
+    environment("DOCKER_HOST", System.getenv("DOCKER_HOST") ?: "unix:///var/run/docker.sock")
+    environment("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE", "/var/run/docker.sock")
 }
 
 tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
