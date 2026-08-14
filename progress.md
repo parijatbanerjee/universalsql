@@ -1,5 +1,77 @@
 # Progress updates
 
+## Task 3 — Postgres schema and control plane
+**Status:** Complete
+**Commit:** `Task 3: Postgres schema and control plane`
+**Date:** 2026-08-14
+
+Files touched:
+- `src/main/resources/db/migration/V2__seed.sql` — seeds acme tenant (kek_id=acme-kek-1), alice/bob principal closures (alice→PLAT+CORE, bob→CORE), jira/github source_catalog entries, demo RLS/CLS policy
+- `src/main/java/com/ema/usql/controlplane/TenantConfig.java` — record with {tenantId, name, kekId, status, config: Map}
+- `src/main/java/com/ema/usql/controlplane/TenantConfigService.java` — @Service reads tenant + tenant_config via JdbcTemplate; constructor injection; throws UsqlException(ENTITLEMENT_DENIED) for missing tenant
+- `src/main/java/com/ema/usql/controlplane/SourceCatalogEntry.java` — record with {connectorId, tableName, columns, capabilities}
+- `src/main/java/com/ema/usql/controlplane/SourceCatalogRegistry.java` — @Service reads source_catalog via JdbcTemplate; throws UsqlException(SOURCE_UNAVAILABLE) for missing connector
+- `src/test/java/com/ema/usql/controlplane/Task3SchemaTest.java` — @Testcontainers PostgreSQL; 5 tests
+
+Acceptance criteria:
+- [PASS] All Flyway migrations (V1+V2) apply cleanly — verified via information_schema table count
+- [PASS] TenantConfigService and SourceCatalogRegistry exist and are Spring beans
+- [PASS] acme tenant exists with kek_id='acme-kek-1'
+- [PASS] alice's principal_closure includes project:PLAT and project:CORE
+- [PASS] bob's principal_closure includes only project:CORE
+
+`./gradlew build` GREEN.
+
+---
+
+## Task 4 — Crypto module
+**Status:** Complete
+**Commit:** `Task 4: Crypto module`
+**Date:** 2026-08-14
+
+Files touched:
+- `src/main/java/com/ema/usql/crypto/EnvelopeCipher.java` — package-private AES/GCM/NoPadding; EncryptionContext as AAD; wire format [12-byte IV][ciphertext+tag]
+- `src/main/java/com/ema/usql/crypto/LocalKmsModule.java` — package-private KmsModule impl; KEKs stored in data/kms/{tenant}.key as Base64; auto-provisions KEK on first use; destroyKek deletes key file
+- `src/main/java/com/ema/usql/crypto/CryptoConfig.java` — @Configuration; exposes KmsModule bean; creates data/kms/ directory on startup
+- `src/test/java/com/ema/usql/crypto/Task4CryptoTest.java` — 4 unit tests; no Spring context (manual wiring + @TempDir)
+
+Acceptance criteria:
+- [PASS] Round-trip encrypt/decrypt passes (Test 1)
+- [PASS] Mismatched EncryptionContext → AEADBadTagException / BadPaddingException (Test 2)
+- [PASS] After destroyKek, previously wrapped DEKs fail to unwrap with UsqlException(ENTITLEMENT_DENIED) because the auto-provisioned replacement KEK produces a tag mismatch (Test 3)
+- [PASS] Mismatched purpose in unwrapDek → UsqlException(ENTITLEMENT_DENIED) (Test 4)
+
+Deviations:
+- ArchUnit SecretKey containment rule (Task 22) already forbids non-crypto packages from referencing SecretKey; EnvelopeCipher and LocalKmsModule are package-private so the API surface is only KmsModule (which lives in crypto.api and is the permitted reference point).
+- Test 3 relies on auto-provisioning: destroyKek deletes the key file, but loadKek on the next call generates a fresh (different) KEK. Decrypting an old wrapped DEK with the new KEK produces AEADBadTagException — caught and re-thrown as UsqlException(ENTITLEMENT_DENIED). This faithfully implements crypto shredding.
+
+`./gradlew build` GREEN.
+
+---
+
+## Task 22 — ArchUnit conformance rules (moved after Task 4)
+**Status:** Complete
+**Commit:** `Task 22: ArchUnit conformance rules (moved after Task 4)`
+**Date:** 2026-08-14
+
+Files touched:
+- `src/test/java/com/ema/usql/arch/ArchitectureConformanceTest.java` — @AnalyzeClasses; 5 @ArchTest rules
+
+Rules implemented:
+1. `controlplaneCannotAccessCryptoInternals` — controlplane.* cannot access crypto.* (non-api internals)
+2. `noModuleAccessesTelemetryImpl` — no module outside telemetry.* may reference TelemetryImpl/SpanImpl/StructuredLoggerImpl
+3. `sharedDoesNotImportModulePackages` — shared.* must not depend on any module package
+4. `secretKeyContainmentRule` — javax.crypto.SecretKey only referenceable from crypto.*, knowledgecache.*, authz.principals.*
+5. `tokenContainmentRule` — OAuthToken/TokenValue class names forbidden outside sourcegateway.* (placeholder; trivially passes now; will auto-enforce when Task 14 adds these classes)
+
+Acceptance criteria:
+- [PASS] All ArchUnit rules pass on current codebase
+- [PASS] `./gradlew build` GREEN — no violations detected
+
+`./gradlew build` GREEN.
+
+---
+
 ## Task 1b — Cross-module interfaces and shared DTOs
 **Status:** Complete  
 **Commit:** `Task 1b: Cross-module interfaces and shared DTOs`  
