@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: universalsql
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/usql}
+    username: ${DB_USER:usql}
+    password: ${DB_PASS:usql}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${OIDC_ISSUER_URI:http://localhost:9000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+  endpoint:
+    health:
+      show-details: always
+
+otel:
+  exporter:
+    otlp:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4317}
+  service:
+    name: universalsql
+
+logging:
+  config: classpath:logback-spring.xml
