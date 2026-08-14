@@ -1,0 +1,20 @@
+{
+  "mappings": [
+    {
+      "name": "jira-search-normal",
+      "request": {"method": "GET", "urlPathPattern": "/rest/api/3/search"},
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": "application/json", "X-RateLimit-Remaining": "94", "X-RateLimit-Limit": "100"},
+        "jsonBody": {
+          "total": 3,
+          "issues": [
+            {"key": "PLAT-1", "fields": {"project": {"key": "PLAT"}, "status": {"name": "Open"}, "priority": {"name": "High"}, "assignee": {"accountId": "alice"}, "summary": "Fix login bug", "created": "2024-01-01T10:00:00Z", "updated": "2024-01-15T10:00:00Z"}},
+            {"key": "PLAT-2", "fields": {"project": {"key": "PLAT"}, "status": {"name": "Open"}, "priority": {"name": "Medium"}, "assignee": {"accountId": "bob"}, "summary": "Add OAuth support", "created": "2024-01-02T10:00:00Z", "updated": "2024-01-16T10:00:00Z"}},
+            {"key": "CORE-1", "fields": {"project": {"key": "CORE"}, "status": {"name": "In Progress"}, "priority": {"name": "Low"}, "assignee": null, "summary": "Refactor DB layer", "created": "2024-01-03T10:00:00Z", "updated": "2024-01-17T10:00:00Z"}}
+          ]
+        }
+      }
+    }
+  ]
+}

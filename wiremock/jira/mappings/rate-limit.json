@@ -1,0 +1,13 @@
+{
+  "mappings": [{
+    "name": "jira-rate-limit",
+    "scenarioName": "rate-limited-jira",
+    "requiredScenarioState": "started",
+    "request": {"method": "GET", "urlPathPattern": "/rest/api/3/search"},
+    "response": {
+      "status": 429,
+      "headers": {"Content-Type": "application/json", "Retry-After": "5"},
+      "jsonBody": {"errorMessages": ["Rate limit exceeded"]}
+    }
+  }]
+}

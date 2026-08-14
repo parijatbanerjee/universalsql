@@ -1,0 +1,14 @@
+{
+  "mappings": [{
+    "name": "jira-slow",
+    "scenarioName": "slow-jira",
+    "requiredScenarioState": "started",
+    "request": {"method": "GET", "urlPathPattern": "/rest/api/3/search"},
+    "response": {
+      "status": 200,
+      "fixedDelayMilliseconds": 2500,
+      "headers": {"Content-Type": "application/json"},
+      "jsonBody": {"total": 0, "issues": []}
+    }
+  }]
+}

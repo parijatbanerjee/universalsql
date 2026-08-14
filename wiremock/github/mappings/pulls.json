@@ -1,0 +1,14 @@
+{
+  "mappings": [{
+    "name": "github-pulls-normal",
+    "request": {"method": "GET", "urlPathPattern": "/repos/acme/issues/pulls"},
+    "response": {
+      "status": 200,
+      "headers": {"Content-Type": "application/json", "X-RateLimit-Remaining": "40", "X-RateLimit-Limit": "60"},
+      "jsonBody": [
+        {"number": 101, "title": "PLAT-1: fix login", "state": "open", "user": {"login": "alice"}, "created_at": "2024-01-10T10:00:00Z", "updated_at": "2024-01-20T10:00:00Z"},
+        {"number": 102, "title": "PLAT-2: add oauth", "state": "open", "user": {"login": "bob"}, "created_at": "2024-01-11T10:00:00Z", "updated_at": "2024-01-21T10:00:00Z"}
+      ]
+    }
+  }]
+}
