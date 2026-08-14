@@ -15,6 +15,15 @@
 | 7 | Updates Manager (PeriodicUpdater, UpdatesHandler, JobStateStore, V3 DLQ migration) | ✅ Done | 5d4ecaa |
 | 8 | SQL parser and logical plan (SqlParser, LogicalPlan, SourceCatalog, InMemorySourceCatalog) | ✅ Done | TBD |
 | 9 | Cache-only query path end-to-end (Orchestrator, ExecutionEngine, QueryController, API DTOs) | ✅ Done | TBD |
+| 20 | Test suite: SecretLeakScanTest, ResultCacheTest, CaffeineResultCache wired into Orchestrator | ✅ Done | TBD |
+
+## Canonical Tests (for README)
+
+Two tests that prove the core value propositions:
+1. `Task11RlsTest#bobSeesOnlyCoreRows` — proves RLS separation: same SQL, bob (CORE-only) sees fewer rows than alice (PLAT+CORE). Injected predicate `project_key IN ('CORE')` is verified.
+2. `Task14TokenTest#resolveToken_singleflight_refreshCalledOnce` — proves singleflight: 10 concurrent requests for an expiring token trigger exactly 1 refresh call.
+
+These are the two tests that the README names as proof of correctness.
 
 ## Key Design Decisions
 
@@ -135,5 +144,14 @@
 - DuckDB hash join SQL uses original aliases (not table names) in ON clause
 - 6 tests: 2 unit (JoinStrategySelector), 4 integration (join_strategy check, issue_keys filter, merged columns, large-sideA hash join)
 
+### Task 20: Test Suite
+- `ResultCache` interface + `CaffeineResultCache` implementation (Caffeine, 5-min TTL, max 1000 entries)
+- Cache key = SHA-256(tenantId | userId | sortedPrincipalSet | aclSyncedAt | maskSet | sql)
+- Result cache wired into Orchestrator: only for CACHE-path single-source queries (not LIVE, not JOIN)
+- ACL sync epoch included in cache key so stale-ACL scenarios bypass cache correctly
+- `SecretLeakScanTest`: captures all Logback events during query; asserts no email/token in logs
+- `ResultCacheTest`: proves cache hit for same user+SQL, proves key isolation for different users
+- 110 tests total, all green
+
 ## Pending Tasks
-- Task 20+: Additional features
+- Tasks 21, 23, 24

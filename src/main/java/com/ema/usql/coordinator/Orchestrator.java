@@ -13,6 +13,7 @@ import com.ema.usql.authz.api.ClsMaskSet;
 import com.ema.usql.authz.api.RlsPredicate;
 import com.ema.usql.coordinator.execution.DuckDbSession;
 import com.ema.usql.coordinator.execution.ExecutionEngine;
+import com.ema.usql.coordinator.execution.ResultCache;
 import com.ema.usql.coordinator.execution.ResultMerger;
 import com.ema.usql.knowledgecache.api.KnowledgeCacheService;
 import com.ema.usql.knowledgecache.api.Watermark;
@@ -38,10 +39,16 @@ import com.ema.usql.telemetry.api.Span;
 import com.ema.usql.telemetry.api.Telemetry;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -80,6 +87,7 @@ public class Orchestrator {
     private final Telemetry telemetry;
     private final ResultMerger resultMerger;
     private final JoinStrategySelector joinStrategySelector;
+    private final ResultCache resultCache;
 
     public Orchestrator(
             SqlParser sqlParser,
@@ -94,7 +102,8 @@ public class Orchestrator {
             AuditService auditService,
             Telemetry telemetry,
             ResultMerger resultMerger,
-            JoinStrategySelector joinStrategySelector) {
+            JoinStrategySelector joinStrategySelector,
+            ResultCache resultCache) {
         this.sqlParser = sqlParser;
         this.sourceCatalog = sourceCatalog;
         this.authzService = authzService;
@@ -108,6 +117,7 @@ public class Orchestrator {
         this.telemetry = telemetry;
         this.resultMerger = resultMerger;
         this.joinStrategySelector = joinStrategySelector;
+        this.resultCache = resultCache;
     }
 
     /**
@@ -122,8 +132,29 @@ public class Orchestrator {
             // 1. Parse and validate SQL
             LogicalPlan plan = sqlParser.parse(request.sql(), sourceCatalog);
 
-            // 2. Resolve authz (principals, RLS template, CLS masks)
-            AuthzContext authzCtx = authzService.resolve(ctx);
+            // 2a. Check result cache — only for pure cache-path, non-LIVE, non-JOIN queries.
+            // We skip result caching entirely when include_latest_data=true (LIVE path) or
+            // when the query is a JOIN (join_strategy metadata would be lost in the cached response).
+            // This keeps the result cache safe for correctness across test runs.
+            AuthzContext authzCtxPrelim = authzService.resolve(ctx);
+            boolean eligibleForResultCache = !request.includeLatestData() && plan.joinTable() == null;
+            String cacheKey = buildCacheKey(ctx, authzCtxPrelim, request.sql());
+            if (eligibleForResultCache) {
+                Optional<QueryResult> cached = resultCache.get(cacheKey);
+                if (cached.isPresent()) {
+                    QueryResult cachedResult = cached.get();
+                    PolicyMetadata policyMeta = new PolicyMetadata(false, false, null);
+                    QueryMetadata metadata = new QueryMetadata(
+                            traceId, 0L, false,
+                            List.of(new SourceMetadata("result-cache", "CACHE", 0L)),
+                            Map.of(), policyMeta, null);
+                    recordAuditEvent(traceId, ctx, plan, request.sql(), "ALLOW", null);
+                    return new QueryResponse(cachedResult.columns(), cachedResult.rows(), metadata);
+                }
+            }
+
+            // 2. Reuse the preliminary authz context resolved above
+            AuthzContext authzCtx = authzCtxPrelim;
 
             // 3. Compile RLS predicate from template + principals
             RlsPredicate rlsPredicate = authzCtx.rlsPredicate() != null && authzCtx.rlsPredicate().expression() != null
@@ -190,6 +221,11 @@ public class Orchestrator {
 
             // 7. Record audit event (ALLOW)
             recordAuditEvent(traceId, ctx, plan, request.sql(), "ALLOW", null);
+
+            // 8. Store result in cache (only for eligible queries: non-partial, CACHE path)
+            if (eligibleForResultCache && !partial) {
+                resultCache.put(cacheKey, merged);
+            }
 
             return new QueryResponse(merged.columns(), merged.rows(), metadata);
         }
@@ -874,8 +910,8 @@ public class Orchestrator {
     private String sqlHash(String tenantId, String sql) {
         try {
             String salted = tenantId + ":" + sql;
-            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
-            byte[] digest = md.digest(salted.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(salted.getBytes(StandardCharsets.UTF_8));
             StringBuilder sb = new StringBuilder();
             for (byte b : digest) {
                 sb.append(String.format("%02x", b));
@@ -883,6 +919,44 @@ public class Orchestrator {
             return sb.toString();
         } catch (Exception e) {
             return "hash-error";
+        }
+    }
+
+    /**
+     * Build a stable cache key from the request and resolved authz context.
+     * Key = SHA-256(tenantId | userId | sortedPrincipalSet | aclSyncedAt | maskSet | sql).
+     * Different principals for the same SQL get different cache entries.
+     * The ACL sync timestamp ensures stale-ACL scenarios bypass the cache.
+     */
+    private String buildCacheKey(TenantContext ctx, AuthzContext authzCtx, String sql) {
+        try {
+            // Sort principal set for determinism
+            Set<String> sorted = authzCtx.principalSet() != null
+                    ? new TreeSet<>(authzCtx.principalSet())
+                    : new TreeSet<>();
+            String maskKey = authzCtx.clsMaskSet() != null
+                    ? authzCtx.clsMaskSet().maskedColumns().toString()
+                    : "";
+            // Include ACL sync epoch seconds so stale-ACL changes invalidate the key
+            long aclEpoch = authzCtx.aclSyncedAt() != null
+                    ? authzCtx.aclSyncedAt().getEpochSecond()
+                    : 0L;
+            String raw = ctx.tenantId()
+                    + "|" + ctx.userId()
+                    + "|" + sorted
+                    + "|" + aclEpoch
+                    + "|" + maskKey
+                    + "|" + sql;
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(raw.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : digest) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            // Fallback to a non-cacheable key per call (UUID)
+            return UUID.randomUUID().toString();
         }
     }
 
