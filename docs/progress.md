@@ -13,6 +13,8 @@
 | 5 | Connector SDK and mock sources (JiraConnector, GithubConnector, ConnectorRegistry, WireMock mappings) | ✅ Done | 1afd249 |
 | 6 | Knowledge cache service (TenantDuckDbRegistry, WatermarkStore, KnowledgeCacheServiceImpl) | ✅ Done | 38f60a8 |
 | 7 | Updates Manager (PeriodicUpdater, UpdatesHandler, JobStateStore, V3 DLQ migration) | ✅ Done | 5d4ecaa |
+| 8 | SQL parser and logical plan (SqlParser, LogicalPlan, SourceCatalog, InMemorySourceCatalog) | ✅ Done | TBD |
+| 9 | Cache-only query path end-to-end (Orchestrator, ExecutionEngine, QueryController, API DTOs) | ✅ Done | TBD |
 
 ## Key Design Decisions
 
@@ -33,12 +35,19 @@
 - DLQ null-tenantId fallback ensures `NOT NULL` constraint on `dlq_event.tenant_id` is always satisfied
 - `PeriodicUpdater` is manually called in tests; `@Scheduled` is not triggered
 
+### Task 8: SQL Parser
+- Uses JSqlParser 4.9 with `ExpressionVisitorAdapter` (not deprecated `ExpressionDeParser.visit(Expression)`)
+- Logical column names in catalog: `reporter_email` / `author_email` (physical schema uses `_enc` suffix)
+- Validates: SELECT-only, no OR, no subqueries, no aggregates, at most one JOIN, all tables/columns in catalog
+- `InMemorySourceCatalog` hardcodes the two known tables; interface allows future override
+
+### Task 9: Cache-only Query Path
+- `Orchestrator` implements the full span hierarchy: `query.total` → `cache.lookup` → `fragment.{connector}[path=CACHE]`
+- `StubAuthzService` (main source) registered with `@ConditionalOnMissingBean` — Task 10 can override it
+- `QueryController` uses `@AutoConfigureMockMvc(addFilters=false)` in tests (no JWT setup needed)
+- `freshness_ms` comes from `WatermarkStore.ageMs()` — non-zero once a watermark is written
+
 ## Pending Tasks
-- Task 8: Source Gateway (circuit breaker, rate limiting, live fetch)
-- Task 9: Query Planner
-- Task 10: SQL Coordinator
-- Task 11: AuthZ module
-- Task 12: Audit module
-- Task 13: API layer (REST endpoints)
-- Task 14: OAuth token management
-- Task 15+: Additional features
+- Task 10: Real AuthZ module
+- Task 11: Source Gateway (circuit breaker, rate limiting, live fetch)
+- Task 12+: Additional features
