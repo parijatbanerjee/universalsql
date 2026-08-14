@@ -18,6 +18,7 @@
 | 20 | Test suite: SecretLeakScanTest, ResultCacheTest, CaffeineResultCache wired into Orchestrator | ✅ Done | TBD |
 | 21 | k6 load test script, generate-token.sh, DevController /dev/token endpoint | ✅ Done | TBD |
 | 23 | Crypto-shred and off-boarding: CryptoShredService, AdminController, Orchestrator tenant check | ✅ Done | TBD |
+| 24 | README, docs/architecture-mapping.md, docs/trade-offs.md | ✅ Done | TBD |
 
 ## Canonical Tests (for README)
 
@@ -180,5 +181,13 @@ These are the two tests that the README names as proof of correctness.
 - ArchUnit: AdminController uses `CryptoShredService` from `crypto.api` (not `crypto` internals) — all rules pass
 - 113 tests total, all green
 
-## Pending Tasks
-- Task 24
+### Task 24: README and Documentation
+- `README.md`: Quick start (5 steps), 3 curl examples, 2 canonical tests, load test results table, API reference
+- Canonical tests documented:
+  - `Task11RlsTest#bobSeesOnlyCoreRows` — RLS separation proof
+  - `Task14TokenTest#resolveToken_singleflight_refreshCalledOnce` — singleflight proof
+- `docs/architecture-mapping.md`: 25-row module-to-component table, request flow diagram, data flow for encrypted columns
+- `docs/trade-offs.md`: 5 trade-offs (JSqlParser vs Calcite, DuckDB-per-tenant, no async tier, monolith, column-level encryption)
+- All 113 tests green; `./gradlew build` passes
+
+## All Tasks Complete
