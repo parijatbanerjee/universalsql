@@ -39,7 +39,9 @@ public class AclStore {
         );
 
         if (rows.isEmpty() || rows.get(0).get("max_version") == null) {
-            return new AclSnapshot("0", Instant.EPOCH);
+            // No ACL data: treat as "just synced now" (fresh) to avoid forcing LIVE path
+            // when no resource_acl rows exist for this user.
+            return new AclSnapshot("0", Instant.now());
         }
 
         Map<String, Object> row = rows.get(0);

@@ -73,5 +73,40 @@
 - DENY events capture the error code reason (e.g. MASKED_COLUMN_IN_PREDICATE)
 - `QueryMetadata.trace_id` included in response JSON for correlation
 
+### Task 14: OAuth token resolution
+- `OAuthConnectionRecord` record DTO for `oauth_connection` table
+- `OAuthConnectionStore` @Service — CRUD via JdbcTemplate, plaintext mode when wrappedDek empty
+- `TokenService` interface in `authz.api` (cross-module boundary for SourceGateway to call)
+- `OAuthTokenService` in `authz.principals` — only allowed non-crypto package to hold SecretKey
+  - Singleflight via `ConcurrentHashMap<String, CompletableFuture<String>>` with `computeIfAbsent`
+  - AES-GCM decrypt path when DEK is present; plaintext fallback for seed data
+- V4 migration seeds 4 oauth_connection rows (alice/bob/carol + beta tenant)
+- ArchUnit `tokenContainmentRule` updated: uses `haveSimpleName` (exact match) for OAuthToken/TokenValue
+
+### Task 15: Source Gateway
+- `SourceGatewayImpl` with hierarchical Resilience4j RateLimiter (global 100/s, tenant 20/s, user 5/s)
+- Bulkhead per connector (10 concurrent calls max), non-blocking tryAcquire
+- Circuit breaker per connector (50% failure rate / 10-call window / 30s open state)
+- `SourceGatewayConfig` @Configuration bean wiring
+- `getRateLimitStatus()` returns remaining/limit/resetsAt for tenant-level bucket
+
+### Task 16: Live Query Engine
+- `Fragment` record updated with `timeoutMs` field (backward-compatible 7-arg constructor)
+- `LiveQueryService` interface in `livequery.api`
+- `LiveQueryEngineImpl` executes LIVE fragments via SourceGateway with CompletableFuture timeout
+  - freshness_ms = 0 for live results; SOURCE_TIMEOUT on deadline exceeded
+- `LiveQueryConfig` @Configuration
+- Orchestrator updated: virtual-thread parallel fragment execution, `partial=true` on timeout
+- Orchestrator dispatches LIVE vs CACHE per fragment based on path
+
+### Task 17: Path selector and freshness control
+- `PathSelector` @Service: pure 6-branch decision function (aclAge → includeLatestData → watermark → budget → rows → LIVE)
+- `AclFreshnessImpl`: age check from AuthzContext.aclSyncedAt()
+- `RateLimitBudgetImpl`: backed by SourceGateway.getRateLimitStatus()
+- `AclStore.getSnapshot()` returns `Instant.now()` (not EPOCH) when no ACL rows → avoids spurious LIVE override
+- Orchestrator wires PathSelector via constructor injection: computes all 5 inputs per fragment
+- 7 unit tests cover all 6 decision branches + boundary condition
+- 3 integration tests: CACHE path, LIVE path, stale-ACL → LIVE override
+
 ## Pending Tasks
-- Task 14+: Additional features
+- Task 18+: Additional features

@@ -15,10 +15,15 @@ import com.ema.usql.coordinator.execution.ExecutionEngine;
 import com.ema.usql.knowledgecache.api.KnowledgeCacheService;
 import com.ema.usql.knowledgecache.api.Watermark;
 import com.ema.usql.livequery.api.LiveQueryService;
+import com.ema.usql.planner.AclFreshnessImpl;
+import com.ema.usql.planner.FreshnessHint;
 import com.ema.usql.planner.LogicalPlan;
+import com.ema.usql.planner.PathSelector;
 import com.ema.usql.planner.PolicyCompiler;
+import com.ema.usql.planner.RateLimitBudgetImpl;
 import com.ema.usql.planner.SqlParser;
 import com.ema.usql.planner.catalog.SourceCatalog;
+import com.ema.usql.sourcegateway.api.SourceGateway;
 import com.ema.usql.shared.ErrorCode;
 import com.ema.usql.shared.Fragment;
 import com.ema.usql.shared.QueryPath;
@@ -56,6 +61,8 @@ public class Orchestrator {
     private final ExecutionEngine executionEngine;
     private final KnowledgeCacheService knowledgeCacheService;
     private final LiveQueryService liveQueryService;
+    private final PathSelector pathSelector;
+    private final SourceGateway sourceGateway;
     private final AuditService auditService;
     private final Telemetry telemetry;
 
@@ -67,6 +74,8 @@ public class Orchestrator {
             ExecutionEngine executionEngine,
             KnowledgeCacheService knowledgeCacheService,
             LiveQueryService liveQueryService,
+            PathSelector pathSelector,
+            SourceGateway sourceGateway,
             AuditService auditService,
             Telemetry telemetry) {
         this.sqlParser = sqlParser;
@@ -76,6 +85,8 @@ public class Orchestrator {
         this.executionEngine = executionEngine;
         this.knowledgeCacheService = knowledgeCacheService;
         this.liveQueryService = liveQueryService;
+        this.pathSelector = pathSelector;
+        this.sourceGateway = sourceGateway;
         this.auditService = auditService;
         this.telemetry = telemetry;
     }
@@ -125,8 +136,8 @@ public class Orchestrator {
             // 5. Inject RLS into SQL
             String effectiveSql = policyCompiler.injectIntoSql(request.sql(), rlsPredicate);
 
-            // 6. Build fragments (path determined by includeLatestData flag)
-            List<Fragment> fragments = buildFragments(plan, effectiveSql, request);
+            // 6. Build fragments (path determined by PathSelector)
+            List<Fragment> fragments = buildFragments(plan, effectiveSql, request, authzCtx, ctx);
 
             // 7. Execute all fragments in parallel using virtual threads
             //    LIVE fragments go to liveQueryService; CACHE fragments go to executionEngine
@@ -200,29 +211,54 @@ public class Orchestrator {
     // -------------------------------------------------------------------------
 
     private List<Fragment> buildFragments(LogicalPlan plan, String effectiveSql,
-                                          com.ema.usql.api.QueryRequest request) {
+                                          com.ema.usql.api.QueryRequest request,
+                                          AuthzContext authzCtx, TenantContext ctx) {
         List<Fragment> fragments = new ArrayList<>();
 
         String firstTable = plan.tables().get(0);
         String connectorId = TABLE_TO_CONNECTOR.getOrDefault(firstTable, firstTable);
 
-        // Determine path based on includeLatestData flag
-        QueryPath path = request.includeLatestData() ? QueryPath.LIVE : QueryPath.CACHE;
-
-        // For LIVE: derive connectionRef from the connector (use first seeded connection for demo)
-        // In production, the orchestrator would look up the user's connection for this connector.
-        String connectionRef = deriveConnectionRef(connectorId, "alice"); // demo fallback
-
+        String connectionRef = deriveConnectionRef(connectorId, ctx.userId());
         long timeoutMs = request.timeoutMs() > 0 ? request.timeoutMs() : 30_000L;
 
-        Fragment fragment = new Fragment(
+        // Build a preliminary fragment to pass to PathSelector
+        Fragment preliminary = new Fragment(
                 UUID.randomUUID().toString(),
                 connectorId,
                 effectiveSql,
                 List.of(),
                 connectionRef,
                 -1L,
-                path,
+                QueryPath.CACHE,  // will be overridden by PathSelector
+                timeoutMs
+        );
+
+        // Compute PathSelector inputs
+        FreshnessHint freshnessHint = new FreshnessHint(
+                request.includeLatestData(),
+                request.maxStalenessMs() > 0 ? request.maxStalenessMs() : 0
+        );
+
+        Watermark watermark = knowledgeCacheService.getWatermark(
+                connectorId, firstTable, ctx.tenantId());
+
+        AclFreshnessImpl aclFreshness = new AclFreshnessImpl(authzCtx.aclSyncedAt());
+
+        RateLimitBudgetImpl rateLimitBudget = new RateLimitBudgetImpl(sourceGateway, ctx.tenantId());
+
+        // Select path
+        QueryPath selectedPath = pathSelector.select(
+                preliminary, freshnessHint, watermark, rateLimitBudget, aclFreshness);
+
+        // Build final fragment with selected path
+        Fragment fragment = new Fragment(
+                preliminary.fragmentId(),
+                connectorId,
+                effectiveSql,
+                List.of(),
+                connectionRef,
+                preliminary.estimatedRows(),
+                selectedPath,
                 timeoutMs
         );
         fragments.add(fragment);
