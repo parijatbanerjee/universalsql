@@ -14,12 +14,20 @@ public record Fragment(
         String connectionRef,
         long estimatedRows,
         QueryPath path,
-        long timeoutMs
+        long timeoutMs,
+        List<String> inListFilter
 ) {
-    /** Backward-compatible constructor: defaults timeoutMs to 30 seconds. */
+    /** Full constructor without inListFilter (defaults to empty list). */
+    public Fragment(String fragmentId, String connector, String sql,
+                    List<String> predicates, String connectionRef,
+                    long estimatedRows, QueryPath path, long timeoutMs) {
+        this(fragmentId, connector, sql, predicates, connectionRef, estimatedRows, path, timeoutMs, List.of());
+    }
+
+    /** Backward-compatible constructor: defaults timeoutMs to 30 seconds and inListFilter to empty. */
     public Fragment(String fragmentId, String connector, String sql,
                     List<String> predicates, String connectionRef,
                     long estimatedRows, QueryPath path) {
-        this(fragmentId, connector, sql, predicates, connectionRef, estimatedRows, path, 30_000L);
+        this(fragmentId, connector, sql, predicates, connectionRef, estimatedRows, path, 30_000L, List.of());
     }
 }

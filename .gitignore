@@ -3,3 +3,6 @@ build/
 .DS_Store
 *.class
 out/
+data/
+*.duckdb
+*.duckdb.wal

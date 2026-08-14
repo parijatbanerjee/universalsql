@@ -47,10 +47,25 @@ public class GithubConnector implements ConnectorSdk {
     @SuppressWarnings("unchecked")
     public List<ConnectorRecord> fetch(SourceQuery query, Credential credential) {
         try {
+            // Check for issue_keys parameter (semi-join IN-list filter)
+            String issueKeysParam = query.params() != null
+                    ? query.params().stream()
+                        .filter(p -> p instanceof String s && s.startsWith("issue_keys="))
+                        .map(p -> ((String) p).substring("issue_keys=".length()))
+                        .findFirst()
+                        .orElse(null)
+                    : null;
+
+            final String issueKeys = issueKeysParam;
+
             List<Map<String, Object>> response = restClient.get()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/repos/acme/issues/pulls")
-                            .build())
+                    .uri(uriBuilder -> {
+                        var builder = uriBuilder.path("/repos/acme/issues/pulls");
+                        if (issueKeys != null && !issueKeys.isEmpty()) {
+                            builder = builder.queryParam("issue_keys", issueKeys);
+                        }
+                        return builder.build();
+                    })
                     .header("X-Mock-User", credential.connectionRef())
                     .retrieve()
                     .onStatus(status -> status.value() == 429, (req, resp) -> {

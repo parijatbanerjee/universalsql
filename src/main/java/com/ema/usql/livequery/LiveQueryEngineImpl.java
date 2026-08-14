@@ -46,11 +46,18 @@ public class LiveQueryEngineImpl implements LiveQueryService {
         try (var span = telemetry.span("live.query",
                 Map.of("connector", connectorId, "tenant", ctx.tenantId()))) {
 
-            // Build SourceQuery from the fragment
+            // Build SourceQuery from the fragment; pass inListFilter as params if present
+            List<Object> params = new ArrayList<>();
+            if (fragment.inListFilter() != null && !fragment.inListFilter().isEmpty()) {
+                // Encode as "issue_keys=KEY1,KEY2,..." param string for GithubConnector
+                String joined = String.join(",", fragment.inListFilter());
+                params.add("issue_keys=" + joined);
+            }
+
             SourceQuery sourceQuery = new SourceQuery(
                     connectorId,
                     fragment.sql(),
-                    List.of(),
+                    params,
                     timeoutMs
             );
 
