@@ -14,6 +14,7 @@ import com.ema.usql.authz.api.RlsPredicate;
 import com.ema.usql.coordinator.execution.ExecutionEngine;
 import com.ema.usql.knowledgecache.api.KnowledgeCacheService;
 import com.ema.usql.knowledgecache.api.Watermark;
+import com.ema.usql.livequery.api.LiveQueryService;
 import com.ema.usql.planner.LogicalPlan;
 import com.ema.usql.planner.PolicyCompiler;
 import com.ema.usql.planner.SqlParser;
@@ -32,6 +33,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * Orchestrates query execution end-to-end:
@@ -52,6 +55,7 @@ public class Orchestrator {
     private final PolicyCompiler policyCompiler;
     private final ExecutionEngine executionEngine;
     private final KnowledgeCacheService knowledgeCacheService;
+    private final LiveQueryService liveQueryService;
     private final AuditService auditService;
     private final Telemetry telemetry;
 
@@ -62,6 +66,7 @@ public class Orchestrator {
             PolicyCompiler policyCompiler,
             ExecutionEngine executionEngine,
             KnowledgeCacheService knowledgeCacheService,
+            LiveQueryService liveQueryService,
             AuditService auditService,
             Telemetry telemetry) {
         this.sqlParser = sqlParser;
@@ -70,6 +75,7 @@ public class Orchestrator {
         this.policyCompiler = policyCompiler;
         this.executionEngine = executionEngine;
         this.knowledgeCacheService = knowledgeCacheService;
+        this.liveQueryService = liveQueryService;
         this.auditService = auditService;
         this.telemetry = telemetry;
     }
@@ -119,38 +125,39 @@ public class Orchestrator {
             // 5. Inject RLS into SQL
             String effectiveSql = policyCompiler.injectIntoSql(request.sql(), rlsPredicate);
 
-            // 6. Build fragments
-            List<Fragment> fragments = buildCacheFragments(plan, effectiveSql);
+            // 6. Build fragments (path determined by includeLatestData flag)
+            List<Fragment> fragments = buildFragments(plan, effectiveSql, request);
 
-            // 7. Execute all fragments against the cache (with CLS + ACL enforcement)
+            // 7. Execute all fragments in parallel using virtual threads
+            //    LIVE fragments go to liveQueryService; CACHE fragments go to executionEngine
             List<QueryResult> results = new ArrayList<>();
             List<SourceMetadata> sourceMetas = new ArrayList<>();
+            boolean partial = false;
 
-            for (Fragment fragment : fragments) {
-                String connectorId = fragment.connector();
-                String tableName = plan.tables().isEmpty() ? connectorId : plan.tables().get(0);
+            var executor = Executors.newVirtualThreadPerTaskExecutor();
+            try {
+                // Launch each fragment concurrently
+                List<Future<FragmentOutcome>> futures = new ArrayList<>();
+                for (Fragment fragment : fragments) {
+                    futures.add(executor.submit(() -> executeFragment(fragment, ctx, clsMaskSet,
+                            authzCtx.principalSet(), plan)));
+                }
 
-                try (Span cacheSpan = telemetry.span("cache.lookup",
-                        Map.of("connector", connectorId, "tenant", ctx.tenantId()))) {
-
-                    try (Span fragSpan = telemetry.span("fragment." + connectorId,
-                            Map.of("path", fragment.path().name(), "connector", connectorId))) {
-
-                        QueryResult result = executionEngine.executeCacheFragment(
-                                fragment, ctx, clsMaskSet, authzCtx.principalSet());
-                        results.add(result);
-
-                        Watermark watermark = knowledgeCacheService.getWatermark(
-                                connectorId, tableName, ctx.tenantId());
-                        long freshnessMs = watermark != null ? watermark.ageMs() : 0L;
-
-                        sourceMetas.add(new SourceMetadata(
-                                connectorId,
-                                fragment.path().name(),
-                                freshnessMs
-                        ));
+                // Collect results; timed-out or failed fragments produce partial=true
+                for (int i = 0; i < futures.size(); i++) {
+                    Fragment fragment = fragments.get(i);
+                    try {
+                        FragmentOutcome outcome = futures.get(i).get();
+                        results.add(outcome.result());
+                        sourceMetas.add(outcome.sourceMeta());
+                    } catch (Exception e) {
+                        partial = true;
+                        telemetry.span("fragment.timeout",
+                                Map.of("connector", fragment.connector())).close();
                     }
                 }
+            } finally {
+                executor.shutdown();
             }
 
             // 8. Merge results
@@ -174,7 +181,7 @@ public class Orchestrator {
             QueryMetadata metadata = new QueryMetadata(
                     traceId,
                     overallFreshnessMs,
-                    false,
+                    partial,
                     sourceMetas,
                     Map.of(),
                     policyMeta,
@@ -189,27 +196,83 @@ public class Orchestrator {
     }
 
     // -------------------------------------------------------------------------
-    // Fragment building
+    // Fragment building and execution
     // -------------------------------------------------------------------------
 
-    private List<Fragment> buildCacheFragments(LogicalPlan plan, String effectiveSql) {
+    private List<Fragment> buildFragments(LogicalPlan plan, String effectiveSql,
+                                          com.ema.usql.api.QueryRequest request) {
         List<Fragment> fragments = new ArrayList<>();
 
         String firstTable = plan.tables().get(0);
         String connectorId = TABLE_TO_CONNECTOR.getOrDefault(firstTable, firstTable);
+
+        // Determine path based on includeLatestData flag
+        QueryPath path = request.includeLatestData() ? QueryPath.LIVE : QueryPath.CACHE;
+
+        // For LIVE: derive connectionRef from the connector (use first seeded connection for demo)
+        // In production, the orchestrator would look up the user's connection for this connector.
+        String connectionRef = deriveConnectionRef(connectorId, "alice"); // demo fallback
+
+        long timeoutMs = request.timeoutMs() > 0 ? request.timeoutMs() : 30_000L;
 
         Fragment fragment = new Fragment(
                 UUID.randomUUID().toString(),
                 connectorId,
                 effectiveSql,
                 List.of(),
-                null,
+                connectionRef,
                 -1L,
-                QueryPath.CACHE
+                path,
+                timeoutMs
         );
         fragments.add(fragment);
 
         return fragments;
+    }
+
+    /**
+     * Execute a single fragment, routing to live or cache depending on path.
+     * Returns a FragmentOutcome record with the result and source metadata.
+     */
+    private FragmentOutcome executeFragment(Fragment fragment, TenantContext ctx,
+                                            ClsMaskSet clsMaskSet, java.util.Set<String> principalSet,
+                                            LogicalPlan plan) {
+        String connectorId = fragment.connector();
+        String tableName = plan.tables().isEmpty() ? connectorId : plan.tables().get(0);
+
+        QueryResult result;
+        long freshnessMs;
+
+        if (fragment.path() == QueryPath.LIVE) {
+            // Live path: execute against the source connector
+            result = liveQueryService.execute(fragment, ctx);
+            freshnessMs = 0L; // just fetched
+        } else {
+            // Cache path: execute against DuckDB knowledge cache
+            result = executionEngine.executeCacheFragment(fragment, ctx, clsMaskSet, principalSet);
+            Watermark watermark = knowledgeCacheService.getWatermark(
+                    connectorId, tableName, ctx.tenantId());
+            freshnessMs = watermark != null ? watermark.ageMs() : 0L;
+        }
+
+        SourceMetadata sourceMeta = new SourceMetadata(
+                connectorId,
+                fragment.path().name(),
+                freshnessMs
+        );
+        return new FragmentOutcome(result, sourceMeta);
+    }
+
+    /** Internal record carrying a fragment's execution result and source metadata. */
+    private record FragmentOutcome(QueryResult result, SourceMetadata sourceMeta) {}
+
+    /**
+     * Derive a connection_ref for the given connector and user.
+     * In a real system, this would look up the oauth_connection table.
+     * Demo fallback: "{user}-{connector}-conn"
+     */
+    private String deriveConnectionRef(String connectorId, String userId) {
+        return userId + "-" + connectorId + "-conn";
     }
 
     // -------------------------------------------------------------------------
