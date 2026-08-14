@@ -113,24 +113,27 @@ public class ArchitectureConformanceTest {
     // -------------------------------------------------------------------------
 
     /**
-     * Placeholder rule: no class outside sourcegateway.* may reference a class
-     * named "OAuthToken" or "TokenValue".
+     * Task 14 token containment rule.
      *
-     * These class names will be introduced in Task 14 confined to sourcegateway.
-     * Since neither class exists yet, this rule trivially passes on the current codebase.
+     * Design (spec §7.3): OAuthConnectionRecord, OAuthConnectionStore, and OAuthTokenService
+     * live in authz.principals.* (the only non-crypto package permitted to hold SecretKey).
+     * SourceGateway calls them only via the authz.api.TokenService interface.
      *
-     * When Task 14 adds OAuthToken/TokenValue to com.ema.usql.sourcegateway.*,
-     * this rule will automatically start enforcing that no other module imports them.
+     * This rule enforces that the raw OAuth connection/token classes are NOT referenced
+     * from outside the authz.principals package (or the sourcegateway that may call the interface).
+     * Classes explicitly named "OAuthToken" or "TokenValue" (exact match) must stay within
+     * authz.principals.* or sourcegateway.*; no other module may reference them.
      */
     @ArchTest
     public static final ArchRule tokenContainmentRule =
             noClasses()
                     .that().resideOutsideOfPackage("com.ema.usql.sourcegateway..")
+                    .and().resideOutsideOfPackage("com.ema.usql.authz.principals..")
+                    .and().resideOutsideOfPackage("com.ema.usql.authz..")
                     .should().dependOnClassesThat()
-                    .haveSimpleNameContaining("OAuthToken")
+                    .haveSimpleName("OAuthToken")
                     .orShould().dependOnClassesThat()
-                    .haveSimpleNameContaining("TokenValue")
-                    .because("OAuthToken and TokenValue (Task 14) must be confined to sourcegateway.*; " +
-                             "this rule passes trivially now and will enforce the boundary once Task 14 " +
-                             "adds those classes");
+                    .haveSimpleName("TokenValue")
+                    .because("Classes literally named OAuthToken or TokenValue must be confined to " +
+                             "sourcegateway.* or authz.principals.* — no other module may import them");
 }
