@@ -85,59 +85,52 @@ public class KnowledgeCacheServiceImpl implements KnowledgeCacheService {
             ResultSetMetaData meta = rs.getMetaData();
             int colCount = meta.getColumnCount();
 
+            // Column roles (1-based):
+            //   0 = normal: include as-is via toSerializable()
+            //   1 = skip: never expose (acl_principals, sourced_at)
+            //   2 = reporter_email_enc: decrypt, keep column name, include in output
+            //   3 = author_email_enc: decrypt, keep column name, include in output
+            //   4 = wrapped_dek: skip from output but read internally for decryption
+            int[] colRole = new int[colCount + 1];
+            int wrappedDekIdx = -1;
+
             List<ResultColumn> columns = new ArrayList<>();
             for (int i = 1; i <= colCount; i++) {
-                columns.add(new ResultColumn(meta.getColumnName(i), meta.getColumnTypeName(i)));
+                String colName = meta.getColumnName(i);
+                switch (colName) {
+                    case "acl_principals", "sourced_at" -> colRole[i] = 1;
+                    case "wrapped_dek" -> { colRole[i] = 4; wrappedDekIdx = i; }
+                    case "reporter_email_enc" -> { colRole[i] = 2; columns.add(new ResultColumn(colName, "VARCHAR")); }
+                    case "author_email_enc"   -> { colRole[i] = 3; columns.add(new ResultColumn(colName, "VARCHAR")); }
+                    default -> { colRole[i] = 0; columns.add(new ResultColumn(colName, meta.getColumnTypeName(i))); }
+                }
             }
 
+            final int finalWrappedDekIdx = wrappedDekIdx;
             List<List<Object>> rows = new ArrayList<>();
             while (rs.next()) {
+                byte[] wrappedDekBytes = null;
+                if (finalWrappedDekIdx > 0) {
+                    try { wrappedDekBytes = readBlob(rs, finalWrappedDekIdx); } catch (SQLException ignored) {}
+                }
+
                 List<Object> row = new ArrayList<>();
                 for (int i = 1; i <= colCount; i++) {
-                    String colName = meta.getColumnName(i);
-                    if ("reporter_email_enc".equals(colName)) {
-                        // Decrypt the reporter email
-                        byte[] encryptedEmail = readBlob(rs, i);
-                        byte[] wrappedDekBytes = readBlob(rs, "wrapped_dek");
-                        if (encryptedEmail != null && wrappedDekBytes != null) {
-                            String decrypted = decryptField(encryptedEmail, wrappedDekBytes,
-                                    tenantContext.tenantId(), PURPOSE_REPORTER);
-                            // Apply CLS masking for reporter_email
-                            String maskType = clsMaskSet != null
-                                    ? clsMaskSet.maskedColumns().get("reporter_email")
-                                    : null;
-                            if (maskType != null) {
-                                row.add(maskApplier.maskEmail(decrypted, maskType));
-                            } else {
-                                row.add(decrypted);
-                            }
-                        } else {
-                            row.add(null);
+                    switch (colRole[i]) {
+                        case 1, 4 -> {} // skip
+                        case 2 -> { // reporter_email_enc: decrypt + mask
+                            byte[] enc = null;
+                            try { enc = readBlob(rs, i); } catch (SQLException ignored) {}
+                            row.add(decryptAndMask(enc, wrappedDekBytes, tenantContext.tenantId(),
+                                    PURPOSE_REPORTER, "reporter_email", clsMaskSet));
                         }
-                    } else if ("author_email_enc".equals(colName)) {
-                        // Decrypt the author email
-                        byte[] encryptedEmail = readBlob(rs, i);
-                        byte[] wrappedDekBytes = readBlob(rs, "wrapped_dek");
-                        if (encryptedEmail != null && wrappedDekBytes != null) {
-                            String decrypted = decryptField(encryptedEmail, wrappedDekBytes,
-                                    tenantContext.tenantId(), PURPOSE_AUTHOR);
-                            // Apply CLS masking for author_email
-                            String maskType = clsMaskSet != null
-                                    ? clsMaskSet.maskedColumns().get("author_email")
-                                    : null;
-                            if (maskType != null) {
-                                row.add(maskApplier.maskEmail(decrypted, maskType));
-                            } else {
-                                row.add(decrypted);
-                            }
-                        } else {
-                            row.add(null);
+                        case 3 -> { // author_email_enc: decrypt + mask
+                            byte[] enc = null;
+                            try { enc = readBlob(rs, i); } catch (SQLException ignored) {}
+                            row.add(decryptAndMask(enc, wrappedDekBytes, tenantContext.tenantId(),
+                                    PURPOSE_AUTHOR, "author_email", clsMaskSet));
                         }
-                    } else if ("wrapped_dek".equals(colName)) {
-                        // Skip wrapped_dek column - it's an internal field
-                        row.add(null);
-                    } else {
-                        row.add(rs.getObject(i));
+                        default -> row.add(toSerializable(rs, i));
                     }
                 }
                 rows.add(row);
@@ -491,6 +484,41 @@ public class KnowledgeCacheServiceImpl implements KnowledgeCacheService {
             return ((List<String>) list).toArray(new String[0]);
         }
         return null;
+    }
+
+    /** Convert any JDBC-specific type returned by DuckDB to a plain serializable Java value. */
+    private static Object toSerializable(ResultSet rs, int i) throws SQLException {
+        Object v = rs.getObject(i);
+        if (v == null) return null;
+        if (v instanceof java.sql.Array arr) {
+            // VARCHAR[] → List<String>
+            Object rawArr = arr.getArray();
+            if (rawArr instanceof Object[] objs) {
+                List<String> list = new ArrayList<>();
+                for (Object o : objs) list.add(o == null ? null : o.toString());
+                return list;
+            }
+            return null;
+        }
+        if (v instanceof java.sql.Timestamp ts) return ts.toInstant().toString();
+        if (v instanceof java.sql.Date d)      return d.toLocalDate().toString();
+        if (v instanceof java.sql.Time t)      return t.toString();
+        if (v instanceof java.sql.Blob b)      return null; // blobs handled separately
+        // OffsetDateTime / LocalDateTime from DuckDB TIMESTAMPTZ
+        if (v instanceof java.time.OffsetDateTime odt)  return odt.toInstant().toString();
+        if (v instanceof java.time.LocalDateTime  ldt)  return ldt.toString();
+        if (v instanceof java.time.LocalDate      ld)   return ld.toString();
+        // Primitive wrappers, String, Number → pass through
+        return v;
+    }
+
+    /** Decrypt an encrypted email field and apply CLS masking if required. */
+    private Object decryptAndMask(byte[] enc, byte[] wrappedDekBytes, String tenantId,
+                                  String purpose, String logicalCol, ClsMaskSet clsMaskSet) {
+        if (enc == null || wrappedDekBytes == null) return null;
+        String decrypted = decryptField(enc, wrappedDekBytes, tenantId, purpose);
+        String maskType = clsMaskSet != null ? clsMaskSet.maskedColumns().get(logicalCol) : null;
+        return maskType != null ? maskApplier.maskEmail(decrypted, maskType) : decrypted;
     }
 
     /**

@@ -25,7 +25,15 @@ management:
 otel:
   exporter:
     otlp:
-      endpoint: ${OTLP_ENDPOINT:http://localhost:4317}
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318}
+      protocol: http/protobuf
+      timeout: 2s
+  bsp:
+    schedule-delay: 5000    # export spans every 5s
+  logs:
+    exporter: none          # log lines go to Logback; skip double-export
+  metrics:
+    exporter: none          # metrics exported via Micrometer→Prometheus, not OTLP
   service:
     name: universalsql
 
