@@ -1,9 +1,8 @@
 package com.ema.usql.api;
 
-import com.nimbusds.jose.jwk.JWKSet;
-import com.nimbusds.jose.jwk.RSAKey;
-import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,13 +12,19 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
 
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
 import java.security.interfaces.RSAPublicKey;
 
 /**
  * Security configuration for the HTTP layer.
- * Actuator health and prometheus endpoints are public; all other routes require a JWT.
+ *
+ * <p>When {@code usql.auth.mock-enabled=true} (the default), uses the local ephemeral RSA
+ * key pair from {@link MockJwksConfig} for JWT validation. This enables integration testing
+ * without an external OIDC provider.
+ *
+ * <p>When {@code usql.auth.mock-enabled=false}, the standard Spring Security OAuth2 resource
+ * server auto-configuration kicks in using the configured JWKS URI.
+ *
+ * <p>Actuator health and prometheus endpoints are always public.
  */
 @Configuration
 @EnableWebSecurity
@@ -29,7 +34,7 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/actuator/health", "/actuator/prometheus").permitAll()
+                .requestMatchers("/actuator/health", "/actuator/prometheus", "/mock-jwks").permitAll()
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2
@@ -40,24 +45,12 @@ public class SecurityConfig {
     }
 
     /**
-     * When no issuer URI is configured (e.g., in tests), provide a local ephemeral RSA key
-     * so the security filter chain initialises without requiring a live OIDC provider.
+     * When mock mode is enabled, decode JWTs using the local ephemeral RSA public key.
+     * This eliminates the need for a live OIDC provider during development and testing.
      */
     @Bean
-    @ConditionalOnProperty(
-            name = "spring.security.oauth2.resourceserver.jwt.issuer-uri",
-            havingValue = "",
-            matchIfMissing = true
-    )
-    public JwtDecoder fallbackJwtDecoder() throws Exception {
-        KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
-        gen.initialize(2048);
-        KeyPair pair = gen.generateKeyPair();
-
-        RSAKey rsaKey = new RSAKey.Builder((RSAPublicKey) pair.getPublic())
-                .privateKey(pair.getPrivate())
-                .build();
-
-        return NimbusJwtDecoder.withPublicKey((RSAPublicKey) pair.getPublic()).build();
+    @ConditionalOnProperty(name = "usql.auth.mock-enabled", havingValue = "true", matchIfMissing = true)
+    public JwtDecoder mockJwtDecoder(RSAPublicKey mockRsaPublicKey) {
+        return NimbusJwtDecoder.withPublicKey(mockRsaPublicKey).build();
     }
 }

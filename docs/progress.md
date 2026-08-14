@@ -47,7 +47,31 @@
 - `QueryController` uses `@AutoConfigureMockMvc(addFilters=false)` in tests (no JWT setup needed)
 - `freshness_ms` comes from `WatermarkStore.ageMs()` — non-zero once a watermark is written
 
+### Task 10: AuthZ service and principal resolution
+- `AuthzServiceImpl` (@Primary) replaces StubAuthzService; resolves principals from `principal_closure` table
+- `PrincipalStore`, `AclStore`, `PolicyStore` added in `authz.principals` and `authz` packages
+- `MockJwksConfig` generates ephemeral RSA key pair; `SecurityConfig` uses it for NimbusJwtDecoder
+- Empty principalSet (unauthenticated/no-auth test scenarios) returns null RLS predicate (pass-through)
+- Expired JWT → 401; valid JWT for alice → 200
+
+### Task 11: RLS injection
+- `PolicyCompiler.compile()` resolves `:user.allowed_projects` placeholder from principal set
+- `PolicyCompiler.injectIntoSql()` uses JSqlParser to AND RLS predicate into WHERE clause
+- ACL second-enforcement layer in `KnowledgeCacheServiceImpl.buildAclFilteredSql()` uses DuckDB `list_intersect`
+- Fixed SQL injection bug: LIMIT/ORDER BY were incorrectly wrapped inside parentheses when injecting ACL filter
+
+### Task 12: CLS masking
+- `MaskApplier` applies PARTIAL (first char + *** + @domain) and REDACT (***) masks
+- `ClsMaskSet` populated from `cls_json` in policy table; exempts principals with `role:admin`
+- `SqlParser.validateMaskedColumnsNotInPredicates()` throws ENTITLEMENT_DENIED if masked column in WHERE/ORDER BY
+- `KnowledgeCacheServiceImpl.execute()` applies mask after decrypting reporter_email_enc
+- Added `reporter_email_enc` and `wrapped_dek` to `InMemorySourceCatalog` for physical column query support
+
+### Task 13: Audit service
+- `AuditServiceImpl` inserts rows into `audit_event` table; never stores email/row data/tokens
+- Orchestrator records ALLOW/DENY events with trace_id, sql_hash (SHA-256 of tenantId:sql)
+- DENY events capture the error code reason (e.g. MASKED_COLUMN_IN_PREDICATE)
+- `QueryMetadata.trace_id` included in response JSON for correlation
+
 ## Pending Tasks
-- Task 10: Real AuthZ module
-- Task 11: Source Gateway (circuit breaker, rate limiting, live fetch)
-- Task 12+: Additional features
+- Task 14+: Additional features

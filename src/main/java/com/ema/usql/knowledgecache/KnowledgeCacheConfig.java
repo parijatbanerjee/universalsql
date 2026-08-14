@@ -1,6 +1,7 @@
 package com.ema.usql.knowledgecache;
 
 import com.ema.usql.crypto.api.KmsModule;
+import com.ema.usql.planner.MaskApplier;
 import com.ema.usql.telemetry.api.Telemetry;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -41,7 +42,8 @@ public class KnowledgeCacheConfig {
             TenantDuckDbRegistry registry,
             WatermarkStore watermarkStore,
             KmsModule kmsModule,
+            MaskApplier maskApplier,
             Telemetry telemetry) {
-        return new KnowledgeCacheServiceImpl(registry, watermarkStore, kmsModule, telemetry);
+        return new KnowledgeCacheServiceImpl(registry, watermarkStore, kmsModule, maskApplier, telemetry);
     }
 }

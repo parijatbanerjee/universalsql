@@ -22,6 +22,8 @@ import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.select.SelectItem;
 
+import com.ema.usql.authz.api.ClsMaskSet;
+
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -303,6 +305,71 @@ public class SqlParser {
                 }
             }
         }
+    }
+
+    /**
+     * Check that none of the masked columns appear in WHERE, ORDER BY, or GROUP BY predicates.
+     * If a masked column is found in a predicate, throws UsqlException(ENTITLEMENT_DENIED).
+     *
+     * @param sql          the SQL string to check
+     * @param clsMaskSet   the set of masked columns for this user
+     */
+    public void validateMaskedColumnsNotInPredicates(String sql, ClsMaskSet clsMaskSet) {
+        if (clsMaskSet == null || clsMaskSet.maskedColumns().isEmpty()) {
+            return;
+        }
+
+        Statement statement;
+        try {
+            statement = CCJSqlParserUtil.parse(sql);
+        } catch (Exception e) {
+            return; // parse error will be caught elsewhere
+        }
+
+        if (!(statement instanceof Select select)) {
+            return;
+        }
+        if (!(select.getSelectBody() instanceof PlainSelect ps)) {
+            return;
+        }
+
+        Set<String> maskedCols = clsMaskSet.maskedColumns().keySet();
+
+        // Check WHERE clause
+        Expression where = ps.getWhere();
+        if (where != null) {
+            Set<String> found = new LinkedHashSet<>();
+            where.accept(new ExpressionVisitorAdapter() {
+                @Override
+                public void visit(Column column) {
+                    if (maskedCols.contains(column.getColumnName())) {
+                        found.add(column.getColumnName());
+                    }
+                }
+            });
+            if (!found.isEmpty()) {
+                throw new UsqlException(ErrorCode.ENTITLEMENT_DENIED,
+                        "MASKED_COLUMN_IN_PREDICATE: " + found.iterator().next());
+            }
+        }
+
+        // Check ORDER BY
+        if (ps.getOrderByElements() != null) {
+            for (OrderByElement orderByEl : ps.getOrderByElements()) {
+                orderByEl.getExpression().accept(new ExpressionVisitorAdapter() {
+                    @Override
+                    public void visit(Column column) {
+                        if (maskedCols.contains(column.getColumnName())) {
+                            throw new UsqlException(ErrorCode.ENTITLEMENT_DENIED,
+                                    "MASKED_COLUMN_IN_PREDICATE: " + column.getColumnName());
+                        }
+                    }
+                });
+            }
+        }
+
+        // Note: GROUP BY with aggregates is rejected by checkNoAggregates() earlier in parse().
+        // No additional GROUP BY check needed here.
     }
 
     private void validateWhereColumns(

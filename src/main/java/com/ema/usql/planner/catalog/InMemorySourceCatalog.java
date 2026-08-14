@@ -24,6 +24,8 @@ public class InMemorySourceCatalog implements SourceCatalog {
                 "priority",
                 "assignee_id",
                 "reporter_email",
+                "reporter_email_enc",
+                "wrapped_dek",
                 "summary",
                 "created_at",
                 "updated_at"

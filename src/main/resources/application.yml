@@ -8,11 +8,6 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
-  security:
-    oauth2:
-      resourceserver:
-        jwt:
-          issuer-uri: ${OIDC_ISSUER_URI:http://localhost:9000}
 
 management:
   endpoints:
@@ -36,3 +31,8 @@ otel:
 
 logging:
   config: classpath:logback-spring.xml
+
+usql:
+  auth:
+    mock-enabled: ${USQL_MOCK_AUTH:true}
+    jwks-uri: ${USQL_JWKS_URI:http://localhost:8080/mock-jwks}
