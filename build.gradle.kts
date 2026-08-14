@@ -77,6 +77,9 @@ dependencies {
     // ArchUnit
     testImplementation("com.tngtech.archunit:archunit-junit5:1.3.0")
 
+    // OpenTelemetry in-memory testing support
+    testImplementation("io.opentelemetry:opentelemetry-sdk-testing")
+
     // Testcontainers
     testImplementation("org.testcontainers:testcontainers:1.20.4")
     testImplementation("org.testcontainers:postgresql:1.20.4")
