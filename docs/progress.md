@@ -108,5 +108,32 @@
 - 7 unit tests cover all 6 decision branches + boundary condition
 - 3 integration tests: CACHE path, LIVE path, stale-ACL → LIVE override
 
+### Task 18: Result Merger (hybrid cache+live)
+- `ResultMerger` @Service: merges two QueryResult objects (cache + live) using Map-based dedup
+  - Strategy: live row wins over cached row on same primary key (first column = PK)
+  - Aggregate freshness_ms = max(cacheFreshnessMs, 0) = cacheFreshnessMs (cache is the stalest)
+- `DuckDbSession`: in-memory DuckDB connection for join scratch space (separate from tenant file)
+  - `registerTable(name, QueryResult)`: batch INSERT rows into in-memory table
+  - `executeJoin(sql)` → QueryResult; `close()` releases connection
+- `Fragment` record extended with `inListFilter: List<String>` (backward-compatible constructors)
+- Orchestrator updated: hybrid mode when include_latest_data=true AND watermark exists
+  - Executes CACHE and LIVE fragments in parallel; merges with ResultMerger
+  - LIVE source reported as sources[0] so sources.get(0).path() = "LIVE" (backward compatible)
+- 4 unit tests + 2 integration tests (WireMock Jira + pre-populated DuckDB)
+
+### Task 19: Semi-join reduction
+- `JoinStrategySelector` @Service: selects SEMI_JOIN_REDUCTION (sideA < 100 rows) or DUCKDB_HASH_JOIN
+- Orchestrator updated for JOIN queries:
+  1. Execute side A (jira_issues) first to get join keys
+  2. Select strategy via JoinStrategySelector
+  3. SEMI_JOIN_REDUCTION: pass IN-list keys via Fragment.inListFilter to side B
+  4. DUCKDB_HASH_JOIN: load both sides into DuckDbSession, run JOIN SQL
+- GithubConnector updated: reads `issue_keys=...` from SourceQuery.params(), appends as query param
+- LiveQueryEngineImpl updated: encodes Fragment.inListFilter as `issue_keys=KEY1,KEY2,...` in params
+- QueryMetadata.join_strategy populated with strategy name
+- When include_latest_data=true on JOIN: side B always LIVE (ensures IN-list reaches connector)
+- DuckDB hash join SQL uses original aliases (not table names) in ON clause
+- 6 tests: 2 unit (JoinStrategySelector), 4 integration (join_strategy check, issue_keys filter, merged columns, large-sideA hash join)
+
 ## Pending Tasks
-- Task 18+: Additional features
+- Task 20+: Additional features
